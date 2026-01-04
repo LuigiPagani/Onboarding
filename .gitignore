@@ -164,7 +164,7 @@ dmypy.json
 
 # pytype static type analyzer
 .pytype/
-
+.parquet
 # Cython debug symbols
 cython_debug/
 
@@ -205,3 +205,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+Day_9/data/chatbot_arena.parquet
