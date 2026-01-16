@@ -48,6 +48,16 @@ class RunMetrics:
     unsafe: np.ndarray
 
 
+@dataclass
+class SummaryMetrics:
+    """Aggregate metrics for one agent run."""
+    dr_conversion: float
+    dr_profit: float
+    actual_conversion: float
+    actual_profit: float
+    actual_unsafe: float
+
+
 def _score_description(
     client,
     judge_cfg: JudgeConfig,
@@ -102,7 +112,10 @@ def _run_logging_phase(
         p_conv = conversion_probability(context, action, params)
         conv = 0 if unsafe_injected else sample_conversion(rng, p_conv)
         delay = sample_delay(rng, cfg)
-        pending.append((t + delay, t, conv))
+        if delay == 0:
+            rewards[t] = float(conv)
+        else:
+            pending.append((t + delay, t, conv))
 
         contexts[t] = base
         actions[t] = action
@@ -178,7 +191,11 @@ def _train_agent(
         conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
         delay = sample_delay(rng, cfg)
         cost = model_cost(action, cfg)
-        pending.append((t + delay, t, conv, cost))
+        if delay == 0:
+            conversion[t] = float(conv)
+            profit[t] = float(conv) * cfg.value_per_conversion - cost
+        else:
+            pending.append((t + delay, t, conv, cost))
 
     for _, idx, conv, cost in pending:
         conversion[idx] = float(conv)
@@ -310,26 +327,62 @@ def main() -> None:
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--judge-model", type=str, default="gpt-4.1-nano")
     parser.add_argument("--judge-temp", type=float, default=0.1)
+    parser.add_argument("--delay-mean", type=float, default=50.0)
 
     args = parser.parse_args()
 
     if args.rounds <= args.log_rounds:
         raise SystemExit("--rounds must be greater than --log-rounds")
 
-    cfg = SimConfig()
-    rng = np.random.default_rng(args.seed)
+    summaries, eval_results = run_experiment(
+        rounds=args.rounds,
+        log_rounds=args.log_rounds,
+        eval_rounds=args.eval_rounds,
+        seed=args.seed,
+        epsilon=args.epsilon,
+        judge_model=args.judge_model,
+        judge_temp=args.judge_temp,
+        delay_mean=args.delay_mean,
+        plot=False,
+    )
+
+    for name, summary in summaries.items():
+        print(f"\n{name}:")
+        print(f"  DR conversion estimate: {summary.dr_conversion:.4f}")
+        print(f"  DR profit estimate:     {summary.dr_profit:.4f}")
+        print(f"  Actual conversion:      {summary.actual_conversion:.4f}")
+        print(f"  Actual profit:          {summary.actual_profit:.4f}")
+        print(f"  Actual unsafe rate:     {summary.actual_unsafe:.4f}")
+
+    _plot_curves(eval_results)
+
+
+def run_experiment(
+    *,
+    rounds: int,
+    log_rounds: int,
+    eval_rounds: int,
+    seed: int,
+    epsilon: float,
+    judge_model: str,
+    judge_temp: float,
+    delay_mean: float,
+    plot: bool,
+) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
+    """Run a full experiment and return summaries plus eval curves."""
+    cfg = SimConfig(delay_mean=delay_mean)
+    rng = np.random.default_rng(seed)
     params = build_conversion_params(cfg, rng)
 
     log_data = _run_logging_phase(
         cfg=cfg,
         params=params,
-        rng=np.random.default_rng(args.seed + 1),
-        rounds=args.log_rounds,
+        rng=np.random.default_rng(seed + 1),
+        rounds=log_rounds,
     )
 
     client = get_client()
-
-    judge_cfg = JudgeConfig(model=args.judge_model, temperature=args.judge_temp)
+    judge_cfg = JudgeConfig(model=judge_model, temperature=judge_temp)
 
     d_base = cfg.embed_dim + cfg.category_count + cfg.persona_count + 1
     d_block = d_base * cfg.n_arms
@@ -337,14 +390,15 @@ def main() -> None:
     agents_map = {
         "linucb": agents.LinUCBWrapper(d=d_block, alpha=1.0, lam=1.0),
         "thompson": agents.LinearThompson(d=d_block, lam=1.0, sigma=0.5),
-        "epsilon_greedy": agents.EpsilonGreedyLinear(d=d_block, epsilon=args.epsilon, lam=1.0),
+        "epsilon_greedy": agents.EpsilonGreedyLinear(d=d_block, epsilon=epsilon, lam=1.0),
     }
 
     train_results: Dict[str, RunMetrics] = {}
     eval_results: Dict[str, RunMetrics] = {}
+    summaries: Dict[str, SummaryMetrics] = {}
 
     for idx, (name, agent) in enumerate(agents_map.items()):
-        rng_train = np.random.default_rng(args.seed + 10 + idx)
+        rng_train = np.random.default_rng(seed + 10 + idx)
         train_results[name] = _train_agent(
             name=name,
             agent=agent,
@@ -353,10 +407,10 @@ def main() -> None:
             judge_cfg=judge_cfg,
             client=client,
             rng=rng_train,
-            rounds=args.rounds - args.log_rounds,
+            rounds=rounds - log_rounds,
         )
 
-        rng_eval = np.random.default_rng(args.seed + 20 + idx)
+        rng_eval = np.random.default_rng(seed + 20 + idx)
         eval_results[name] = _eval_policy(
             agent=agent,
             cfg=cfg,
@@ -364,7 +418,7 @@ def main() -> None:
             judge_cfg=judge_cfg,
             client=client,
             rng=rng_eval,
-            rounds=args.eval_rounds,
+            rounds=eval_rounds,
         )
 
         target_actions = _policy_actions_from_contexts(agent, log_data["contexts"], cfg)
@@ -392,14 +446,18 @@ def main() -> None:
         actual_profit = float(np.mean(eval_results[name].profit))
         actual_unsafe = float(np.mean(eval_results[name].unsafe))
 
-        print(f"\n{name}:")
-        print(f"  DR conversion estimate: {dr_conv:.4f}")
-        print(f"  DR profit estimate:     {dr_profit:.4f}")
-        print(f"  Actual conversion:      {actual_conv:.4f}")
-        print(f"  Actual profit:          {actual_profit:.4f}")
-        print(f"  Actual unsafe rate:     {actual_unsafe:.4f}")
+        summaries[name] = SummaryMetrics(
+            dr_conversion=dr_conv,
+            dr_profit=dr_profit,
+            actual_conversion=actual_conv,
+            actual_profit=actual_profit,
+            actual_unsafe=actual_unsafe,
+        )
 
-    _plot_curves(eval_results)
+    if plot:
+        _plot_curves(eval_results)
+
+    return summaries, eval_results
 
 
 if __name__ == "__main__":

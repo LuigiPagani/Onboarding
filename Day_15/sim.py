@@ -64,6 +64,8 @@ def make_context_matrix(context: Dict[str, np.ndarray | int], cfg: SimConfig) ->
 def sample_delay(rng: np.random.Generator, cfg: SimConfig) -> int:
     """Sample an integer delay for conversion feedback."""
     # Exponential delay to mimic long-tail feedback.
+    if cfg.delay_mean <= 0:
+        return 0
     delay = int(rng.exponential(cfg.delay_mean))
     return max(delay, 1)
 
