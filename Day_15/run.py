@@ -1,0 +1,393 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+
+# Allow running from repo root or Day_15 directory.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from Day_15 import agents
+from Day_15.judge import JudgeConfig, get_client, judge_description
+from Day_15.ope import dr_estimate, fit_reward_model, predict_all_actions
+from Day_15.sim import (
+    CATEGORY_NAMES,
+    MODEL_NAMES,
+    PERSONA_NAMES,
+    SimConfig,
+    build_conversion_params,
+    conversion_probability,
+    context_features,
+    generate_description,
+    make_context_matrix,
+    model_cost,
+    proxy_with_noise,
+    sample_context,
+    sample_conversion,
+    sample_delay,
+)
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    plt = None
+
+
+@dataclass
+class RunMetrics:
+    proxy: np.ndarray
+    conversion: np.ndarray
+    profit: np.ndarray
+
+
+def _score_description(
+    client,
+    judge_cfg: JudgeConfig,
+    description: str,
+    persona: str,
+    category: str,
+    unsafe_injected: bool,
+    mock_judge: bool,
+    model_name: str,
+) -> Tuple[float, float]:
+    if mock_judge:
+        base = {"A": 0.45, "B": 0.6, "C": 0.72}
+        proxy_score = float(base.get(model_name, 0.5))
+        unsafe_score = 1.0 if unsafe_injected else 0.0
+        return proxy_score, unsafe_score
+
+    proxy_score, unsafe_score, _ = judge_description(
+        client=client,
+        cfg=judge_cfg,
+        description=description,
+        persona=persona,
+        category=category,
+    )
+    if unsafe_injected:
+        unsafe_score = max(unsafe_score, 0.9)
+    return proxy_score, unsafe_score
+
+
+def _run_logging_phase(
+    cfg: SimConfig,
+    params: Dict[str, np.ndarray],
+    rng: np.random.Generator,
+    rounds: int,
+) -> Dict[str, np.ndarray]:
+    n_arms = cfg.n_arms
+    d_base = cfg.embed_dim + cfg.category_count + cfg.persona_count + 1
+
+    contexts = np.zeros((rounds, d_base), dtype=np.float64)
+    actions = np.zeros(rounds, dtype=int)
+    rewards = np.zeros(rounds, dtype=np.float64)
+    propensities = np.full(rounds, 1.0 / n_arms, dtype=np.float64)
+
+    pending: List[Tuple[int, int, int]] = []
+
+    for t in range(rounds):
+        for deliver_t, idx, conv in [p for p in pending if p[0] <= t]:
+            rewards[idx] = float(conv)
+        pending = [p for p in pending if p[0] > t]
+
+        context = sample_context(rng, cfg)
+        base = context_features(context, cfg)
+        action = int(rng.integers(0, n_arms))
+
+        unsafe_injected = action == 2 and rng.random() < cfg.unsafe_rate
+        p_conv = conversion_probability(context, action, params)
+        conv = 0 if unsafe_injected else sample_conversion(rng, p_conv)
+        delay = sample_delay(rng, cfg)
+        pending.append((t + delay, t, conv))
+
+        contexts[t] = base
+        actions[t] = action
+
+    for _, idx, conv in pending:
+        rewards[idx] = float(conv)
+
+    return {
+        "contexts": contexts,
+        "actions": actions,
+        "rewards": rewards,
+        "propensities": propensities,
+    }
+
+
+def _train_agent(
+    name: str,
+    agent,
+    cfg: SimConfig,
+    params: Dict[str, np.ndarray],
+    judge_cfg: JudgeConfig,
+    client,
+    rng: np.random.Generator,
+    rounds: int,
+    mock_judge: bool,
+) -> RunMetrics:
+    proxy = np.zeros(rounds, dtype=np.float64)
+    conversion = np.zeros(rounds, dtype=np.float64)
+    profit = np.zeros(rounds, dtype=np.float64)
+
+    pending: List[Tuple[int, int, int, float]] = []
+
+    for t in range(rounds):
+        for deliver_t, idx, conv, cost in [p for p in pending if p[0] <= t]:
+            conversion[idx] = float(conv)
+            profit[idx] = float(conv) * cfg.value_per_conversion - cost
+        pending = [p for p in pending if p[0] > t]
+
+        context = sample_context(rng, cfg)
+        X = make_context_matrix(context, cfg)
+        Xb = agents.block_features(X)
+
+        action = agents.select_arm(agent, Xb, rng)
+        unsafe_injected = action == 2 and rng.random() < cfg.unsafe_rate
+
+        description = generate_description(context, action, unsafe_injected)
+        persona = PERSONA_NAMES[int(context["persona"])]
+        category = CATEGORY_NAMES[int(context["category"])]
+
+        proxy_score, unsafe_score = _score_description(
+            client,
+            judge_cfg,
+            description,
+            persona,
+            category,
+            unsafe_injected,
+            mock_judge,
+            MODEL_NAMES[int(action)],
+        )
+        is_unsafe = unsafe_score >= cfg.unsafe_threshold
+
+        proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
+        if is_unsafe:
+            proxy_reward = 0.0
+
+        agent.update(Xb[action], proxy_reward)
+        proxy[t] = proxy_reward
+
+        p_conv = conversion_probability(context, action, params)
+        conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
+        delay = sample_delay(rng, cfg)
+        cost = model_cost(action, cfg)
+        pending.append((t + delay, t, conv, cost))
+
+    for _, idx, conv, cost in pending:
+        conversion[idx] = float(conv)
+        profit[idx] = float(conv) * cfg.value_per_conversion - cost
+
+    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit)
+
+
+def _eval_policy(
+    agent,
+    cfg: SimConfig,
+    params: Dict[str, np.ndarray],
+    judge_cfg: JudgeConfig,
+    client,
+    rng: np.random.Generator,
+    rounds: int,
+    mock_judge: bool,
+) -> RunMetrics:
+    proxy = np.zeros(rounds, dtype=np.float64)
+    conversion = np.zeros(rounds, dtype=np.float64)
+    profit = np.zeros(rounds, dtype=np.float64)
+
+    for t in range(rounds):
+        context = sample_context(rng, cfg)
+        X = make_context_matrix(context, cfg)
+        Xb = agents.block_features(X)
+
+        action = agents.greedy_arm(agent, Xb)
+        unsafe_injected = action == 2 and rng.random() < cfg.unsafe_rate
+
+        description = generate_description(context, action, unsafe_injected)
+        persona = PERSONA_NAMES[int(context["persona"])]
+        category = CATEGORY_NAMES[int(context["category"])]
+
+        proxy_score, unsafe_score = _score_description(
+            client,
+            judge_cfg,
+            description,
+            persona,
+            category,
+            unsafe_injected,
+            mock_judge,
+            MODEL_NAMES[int(action)],
+        )
+        is_unsafe = unsafe_score >= cfg.unsafe_threshold
+
+        proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
+        if is_unsafe:
+            proxy_reward = 0.0
+
+        p_conv = conversion_probability(context, action, params)
+        conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
+        cost = model_cost(action, cfg)
+
+        proxy[t] = proxy_reward
+        conversion[t] = float(conv)
+        profit[t] = float(conv) * cfg.value_per_conversion - cost
+
+    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit)
+
+
+def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -> np.ndarray:
+    actions = np.zeros(contexts.shape[0], dtype=int)
+    for i, base in enumerate(contexts):
+        X = np.repeat(base[None, :], cfg.n_arms, axis=0)
+        Xb = agents.block_features(X)
+        actions[i] = agents.greedy_arm(agent, Xb)
+    return actions
+
+
+def _plot_curves(results: Dict[str, RunMetrics]) -> None:
+    if plt is None:
+        print("matplotlib not installed; skipping plots")
+        return
+
+    plt.figure(figsize=(8, 4))
+    for name, metrics in results.items():
+        avg = np.cumsum(metrics.proxy) / (np.arange(metrics.proxy.size) + 1)
+        plt.plot(avg, label=name)
+    plt.title("Cumulative avg proxy reward")
+    plt.xlabel("round")
+    plt.ylabel("proxy")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure(figsize=(8, 4))
+    for name, metrics in results.items():
+        avg = np.cumsum(metrics.conversion) / (np.arange(metrics.conversion.size) + 1)
+        plt.plot(avg, label=name)
+    plt.title("Cumulative conversion rate")
+    plt.xlabel("round")
+    plt.ylabel("conversion rate")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure(figsize=(8, 4))
+    for name, metrics in results.items():
+        avg = np.cumsum(metrics.profit) / (np.arange(metrics.profit.size) + 1)
+        plt.plot(avg, label=name)
+    plt.title("Cumulative avg profit")
+    plt.xlabel("round")
+    plt.ylabel("profit")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.show()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Day 15 capstone runner")
+    parser.add_argument("--rounds", type=int, default=5000)
+    parser.add_argument("--log-rounds", type=int, default=1000)
+    parser.add_argument("--eval-rounds", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--epsilon", type=float, default=0.1)
+    parser.add_argument("--judge-model", type=str, default="gpt-4.1-nano")
+    parser.add_argument("--judge-temp", type=float, default=0.1)
+    parser.add_argument("--mock-judge", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.rounds <= args.log_rounds:
+        raise SystemExit("--rounds must be greater than --log-rounds")
+
+    cfg = SimConfig()
+    rng = np.random.default_rng(args.seed)
+    params = build_conversion_params(cfg, rng)
+
+    log_data = _run_logging_phase(
+        cfg=cfg,
+        params=params,
+        rng=np.random.default_rng(args.seed + 1),
+        rounds=args.log_rounds,
+    )
+
+    if args.mock_judge:
+        client = None
+    else:
+        client = get_client()
+
+    judge_cfg = JudgeConfig(model=args.judge_model, temperature=args.judge_temp)
+
+    d_base = cfg.embed_dim + cfg.category_count + cfg.persona_count + 1
+    d_block = d_base * cfg.n_arms
+
+    agents_map = {
+        "linucb": agents.LinUCBWrapper(d=d_block, alpha=1.0, lam=1.0),
+        "thompson": agents.LinearThompson(d=d_block, lam=1.0, sigma=0.5),
+        "epsilon_greedy": agents.EpsilonGreedyLinear(d=d_block, epsilon=args.epsilon, lam=1.0),
+    }
+
+    train_results: Dict[str, RunMetrics] = {}
+    eval_results: Dict[str, RunMetrics] = {}
+
+    for idx, (name, agent) in enumerate(agents_map.items()):
+        rng_train = np.random.default_rng(args.seed + 10 + idx)
+        train_results[name] = _train_agent(
+            name=name,
+            agent=agent,
+            cfg=cfg,
+            params=params,
+            judge_cfg=judge_cfg,
+            client=client,
+            rng=rng_train,
+            rounds=args.rounds - args.log_rounds,
+            mock_judge=args.mock_judge,
+        )
+
+        rng_eval = np.random.default_rng(args.seed + 20 + idx)
+        eval_results[name] = _eval_policy(
+            agent=agent,
+            cfg=cfg,
+            params=params,
+            judge_cfg=judge_cfg,
+            client=client,
+            rng=rng_eval,
+            rounds=args.eval_rounds,
+            mock_judge=args.mock_judge,
+        )
+
+        target_actions = _policy_actions_from_contexts(agent, log_data["contexts"], cfg)
+        model = fit_reward_model(
+            log_data["contexts"],
+            log_data["actions"],
+            log_data["rewards"],
+            cfg.n_arms,
+        )
+        q_hat = predict_all_actions(model, log_data["contexts"], cfg.n_arms)
+        dr_conv = dr_estimate(
+            log_data["contexts"],
+            log_data["actions"],
+            log_data["rewards"],
+            log_data["propensities"],
+            target_actions,
+            q_hat,
+        )
+
+        avg_cost = float(np.mean([cfg.costs[a] for a in target_actions]))
+        dr_profit = dr_conv * cfg.value_per_conversion - avg_cost
+
+        actual_conv = float(np.mean(eval_results[name].conversion))
+        actual_profit = float(np.mean(eval_results[name].profit))
+
+        print(f"\n{name}:")
+        print(f"  DR conversion estimate: {dr_conv:.4f}")
+        print(f"  DR profit estimate:     {dr_profit:.4f}")
+        print(f"  Actual conversion:      {actual_conv:.4f}")
+        print(f"  Actual profit:          {actual_profit:.4f}")
+
+    _plot_curves(eval_results)
+
+
+if __name__ == "__main__":
+    main()
