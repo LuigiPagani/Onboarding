@@ -53,15 +53,8 @@ def _score_description(
     persona: str,
     category: str,
     unsafe_injected: bool,
-    mock_judge: bool,
     model_name: str,
 ) -> Tuple[float, float]:
-    if mock_judge:
-        base = {"A": 0.45, "B": 0.6, "C": 0.72}
-        proxy_score = float(base.get(model_name, 0.5))
-        unsafe_score = 1.0 if unsafe_injected else 0.0
-        return proxy_score, unsafe_score
-
     proxy_score, unsafe_score, _ = judge_description(
         client=client,
         cfg=judge_cfg,
@@ -128,7 +121,6 @@ def _train_agent(
     client,
     rng: np.random.Generator,
     rounds: int,
-    mock_judge: bool,
 ) -> RunMetrics:
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
@@ -160,7 +152,6 @@ def _train_agent(
             persona,
             category,
             unsafe_injected,
-            mock_judge,
             MODEL_NAMES[int(action)],
         )
         is_unsafe = unsafe_score >= cfg.unsafe_threshold
@@ -193,7 +184,6 @@ def _eval_policy(
     client,
     rng: np.random.Generator,
     rounds: int,
-    mock_judge: bool,
 ) -> RunMetrics:
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
@@ -218,7 +208,6 @@ def _eval_policy(
             persona,
             category,
             unsafe_injected,
-            mock_judge,
             MODEL_NAMES[int(action)],
         )
         is_unsafe = unsafe_score >= cfg.unsafe_threshold
@@ -294,7 +283,6 @@ def main() -> None:
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--judge-model", type=str, default="gpt-4.1-nano")
     parser.add_argument("--judge-temp", type=float, default=0.1)
-    parser.add_argument("--mock-judge", action="store_true")
 
     args = parser.parse_args()
 
@@ -312,10 +300,7 @@ def main() -> None:
         rounds=args.log_rounds,
     )
 
-    if args.mock_judge:
-        client = None
-    else:
-        client = get_client()
+    client = get_client()
 
     judge_cfg = JudgeConfig(model=args.judge_model, temperature=args.judge_temp)
 
@@ -342,7 +327,6 @@ def main() -> None:
             client=client,
             rng=rng_train,
             rounds=args.rounds - args.log_rounds,
-            mock_judge=args.mock_judge,
         )
 
         rng_eval = np.random.default_rng(args.seed + 20 + idx)
@@ -354,7 +338,6 @@ def main() -> None:
             client=client,
             rng=rng_eval,
             rounds=args.eval_rounds,
-            mock_judge=args.mock_judge,
         )
 
         target_actions = _policy_actions_from_contexts(agent, log_data["contexts"], cfg)
