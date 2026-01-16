@@ -184,13 +184,16 @@ def _train_agent(
         if is_unsafe:
             proxy_reward = 0.0
 
-        agent.update(Xb[action], proxy_reward)
-        proxy[t] = proxy_reward
-
         p_conv = conversion_probability(context, action, params)
         conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
         delay = sample_delay(rng, cfg)
         cost = model_cost(action, cfg)
+
+        # If there's no delay, train on real conversion; otherwise train on proxy.
+        train_reward = float(conv) if delay == 0 else proxy_reward
+        agent.update(Xb[action], train_reward)
+        proxy[t] = proxy_reward
+
         if delay == 0:
             conversion[t] = float(conv)
             profit[t] = float(conv) * cfg.value_per_conversion - cost
