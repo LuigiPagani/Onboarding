@@ -13,6 +13,7 @@ def block_features(X: np.ndarray) -> np.ndarray:
         raise ValueError("X must be 2D")
     K, d = X.shape
     Xb = np.zeros((K, K * d), dtype=np.float64)
+    # Each arm gets its own block so a single linear model learns per-arm weights.
     for a in range(K):
         Xb[a, a * d : (a + 1) * d] = X[a]
     return Xb
@@ -43,6 +44,7 @@ class EpsilonGreedyLinear:
 
     def update(self, x: np.ndarray, r: float) -> None:
         x = np.asarray(x, dtype=np.float64).reshape(-1)
+        # Sherman-Morrison update for the ridge-regression inverse.
         z = self.A_inv @ x
         self.A_inv -= np.outer(z, z) / (1.0 + float(x @ z))
         self.b += float(r) * x

@@ -44,6 +44,7 @@ class RunMetrics:
     proxy: np.ndarray
     conversion: np.ndarray
     profit: np.ndarray
+    unsafe: np.ndarray
 
 
 def _score_description(
@@ -81,9 +82,11 @@ def _run_logging_phase(
     rewards = np.zeros(rounds, dtype=np.float64)
     propensities = np.full(rounds, 1.0 / n_arms, dtype=np.float64)
 
+    # Pending conversion outcomes for delayed feedback: (deliver_at, idx, conv).
     pending: List[Tuple[int, int, int]] = []
 
     for t in range(rounds):
+        # Deliver any conversions whose delay has elapsed.
         for deliver_t, idx, conv in [p for p in pending if p[0] <= t]:
             rewards[idx] = float(conv)
         pending = [p for p in pending if p[0] > t]
@@ -125,10 +128,13 @@ def _train_agent(
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
+    unsafe = np.zeros(rounds, dtype=np.float64)
 
+    # Pending conversions with costs: (deliver_at, idx, conv, cost).
     pending: List[Tuple[int, int, int, float]] = []
 
     for t in range(rounds):
+        # Apply delayed conversion + profit once the feedback arrives.
         for deliver_t, idx, conv, cost in [p for p in pending if p[0] <= t]:
             conversion[idx] = float(conv)
             profit[idx] = float(conv) * cfg.value_per_conversion - cost
@@ -155,6 +161,7 @@ def _train_agent(
             MODEL_NAMES[int(action)],
         )
         is_unsafe = unsafe_score >= cfg.unsafe_threshold
+        unsafe[t] = 1.0 if is_unsafe else 0.0
 
         proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
         if is_unsafe:
@@ -173,7 +180,7 @@ def _train_agent(
         conversion[idx] = float(conv)
         profit[idx] = float(conv) * cfg.value_per_conversion - cost
 
-    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit)
+    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit, unsafe=unsafe)
 
 
 def _eval_policy(
@@ -188,6 +195,7 @@ def _eval_policy(
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
+    unsafe = np.zeros(rounds, dtype=np.float64)
 
     for t in range(rounds):
         context = sample_context(rng, cfg)
@@ -211,6 +219,7 @@ def _eval_policy(
             MODEL_NAMES[int(action)],
         )
         is_unsafe = unsafe_score >= cfg.unsafe_threshold
+        unsafe[t] = 1.0 if is_unsafe else 0.0
 
         proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
         if is_unsafe:
@@ -224,7 +233,7 @@ def _eval_policy(
         conversion[t] = float(conv)
         profit[t] = float(conv) * cfg.value_per_conversion - cost
 
-    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit)
+    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit, unsafe=unsafe)
 
 
 def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -> np.ndarray:
@@ -268,6 +277,16 @@ def _plot_curves(results: Dict[str, RunMetrics]) -> None:
     plt.title("Cumulative avg profit")
     plt.xlabel("round")
     plt.ylabel("profit")
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure(figsize=(8, 4))
+    for name, metrics in results.items():
+        avg = np.cumsum(metrics.unsafe) / (np.arange(metrics.unsafe.size) + 1)
+        plt.plot(avg, label=name)
+    plt.title("Cumulative unsafe rate")
+    plt.xlabel("round")
+    plt.ylabel("unsafe rate")
     plt.legend()
     plt.tight_layout()
 
@@ -341,6 +360,7 @@ def main() -> None:
         )
 
         target_actions = _policy_actions_from_contexts(agent, log_data["contexts"], cfg)
+        # DR OPE: estimate value of the learned policy from the random log.
         model = fit_reward_model(
             log_data["contexts"],
             log_data["actions"],
@@ -362,12 +382,14 @@ def main() -> None:
 
         actual_conv = float(np.mean(eval_results[name].conversion))
         actual_profit = float(np.mean(eval_results[name].profit))
+        actual_unsafe = float(np.mean(eval_results[name].unsafe))
 
         print(f"\n{name}:")
         print(f"  DR conversion estimate: {dr_conv:.4f}")
         print(f"  DR profit estimate:     {dr_profit:.4f}")
         print(f"  Actual conversion:      {actual_conv:.4f}")
         print(f"  Actual profit:          {actual_profit:.4f}")
+        print(f"  Actual unsafe rate:     {actual_unsafe:.4f}")
 
     _plot_curves(eval_results)
 

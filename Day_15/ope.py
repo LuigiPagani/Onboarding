@@ -59,6 +59,7 @@ def dr_estimate(
     target_actions = np.asarray(target_actions, dtype=int).reshape(-1)
 
     idx = np.arange(contexts.shape[0])
+    # Doubly Robust: direct model estimate + IPS correction when target matches logging action.
     direct = q_hat[idx, target_actions]
     correction = (target_actions == actions) * (rewards - q_hat[idx, actions]) / prop
     return float(np.mean(direct + correction))

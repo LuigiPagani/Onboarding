@@ -57,6 +57,7 @@ def make_context_matrix(context: Dict[str, np.ndarray | int], cfg: SimConfig) ->
 
 
 def sample_delay(rng: np.random.Generator, cfg: SimConfig) -> int:
+    # Exponential delay to mimic long-tail feedback.
     delay = int(rng.exponential(cfg.delay_mean))
     return max(delay, 1)
 
@@ -150,4 +151,5 @@ def sample_conversion(rng: np.random.Generator, p: float) -> int:
 
 def proxy_with_noise(rng: np.random.Generator, proxy_score: float, cfg: SimConfig) -> float:
     noisy = float(proxy_score + rng.normal(0.0, cfg.proxy_noise_std))
+    # Keep the proxy reward in [0, 1] after noise.
     return float(np.clip(noisy, 0.0, 1.0))

@@ -34,6 +34,7 @@ class LinearThompson:
         x = np.asarray(x, dtype=np.float64).reshape(-1)
         scale = 1.0 / (self.sigma ** 2)
 
+        # Sherman-Morrison rank-1 update on the precision inverse.
         z = self.A_inv @ x
         denom = 1.0 + scale * float(x @ z)
         self.A_inv -= (scale * np.outer(z, z)) / denom
