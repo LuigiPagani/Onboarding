@@ -7,7 +7,11 @@ from Day_3.linear_thompson import LinearThompson
 
 
 def block_features(X: np.ndarray) -> np.ndarray:
-    """Turn (K, d) contexts into (K, K*d) block features."""
+    """Turn (K, d) contexts into (K, K*d) block features.
+
+    For arm a, the block feature is:
+    Xb[a] = [0, ..., 0, X[a], 0, ..., 0] in R^{K*d}.
+    """
     X = np.asarray(X, dtype=np.float64)
     if X.ndim != 2:
         raise ValueError("X must be 2D")
@@ -20,7 +24,11 @@ def block_features(X: np.ndarray) -> np.ndarray:
 
 
 class EpsilonGreedyLinear:
-    """Epsilon-greedy linear model using ridge regression updates."""
+    """Epsilon-greedy linear model using ridge regression updates.
+
+    Maintains A = lam * I + sum_t x_t x_t^T, b = sum_t r_t x_t,
+    theta_hat = A^{-1} b.
+    """
 
     def __init__(self, d: int, epsilon: float = 0.1, lam: float = 1.0):
         """Initialize epsilon-greedy linear model."""
@@ -47,7 +55,11 @@ class EpsilonGreedyLinear:
         return self.greedy_arm(X)
 
     def update(self, x: np.ndarray, r: float) -> None:
-        """Update the ridge-regression inverse with one sample."""
+        """Update the ridge-regression inverse with one sample.
+
+        Sherman-Morrison:
+        A_inv <- A_inv - (A_inv x x^T A_inv) / (1 + x^T A_inv x)
+        """
         x = np.asarray(x, dtype=np.float64).reshape(-1)
         # Sherman-Morrison update for the ridge-regression inverse.
         z = self.A_inv @ x

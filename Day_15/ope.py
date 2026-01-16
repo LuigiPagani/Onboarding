@@ -56,7 +56,13 @@ def dr_estimate(
     target_actions: np.ndarray,
     q_hat: np.ndarray,
 ) -> float:
-    """Compute a doubly-robust estimate for the target policy."""
+    """Compute a doubly-robust estimate for the target policy.
+
+    DR = (1/n) * sum_i [
+        q_hat(x_i, a*_i)
+        + (a_i == a*_i) * (r_i - q_hat(x_i, a_i)) / p_i
+    ]
+    """
     contexts = np.asarray(contexts, dtype=np.float64)
     actions = np.asarray(actions, dtype=int).reshape(-1)
     rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)
