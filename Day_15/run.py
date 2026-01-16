@@ -41,6 +41,7 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class RunMetrics:
+    """Per-round metrics collected from a run."""
     proxy: np.ndarray
     conversion: np.ndarray
     profit: np.ndarray
@@ -56,6 +57,7 @@ def _score_description(
     unsafe_injected: bool,
     model_name: str,
 ) -> Tuple[float, float]:
+    """Score a description with the LLM judge and safety override."""
     proxy_score, unsafe_score, _ = judge_description(
         client=client,
         cfg=judge_cfg,
@@ -74,6 +76,7 @@ def _run_logging_phase(
     rng: np.random.Generator,
     rounds: int,
 ) -> Dict[str, np.ndarray]:
+    """Collect a random-policy log with delayed conversions for OPE."""
     n_arms = cfg.n_arms
     d_base = cfg.embed_dim + cfg.category_count + cfg.persona_count + 1
 
@@ -125,6 +128,7 @@ def _train_agent(
     rng: np.random.Generator,
     rounds: int,
 ) -> RunMetrics:
+    """Train one agent with proxy rewards and delayed conversion feedback."""
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
@@ -192,6 +196,7 @@ def _eval_policy(
     rng: np.random.Generator,
     rounds: int,
 ) -> RunMetrics:
+    """Evaluate a learned policy without updating it."""
     proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
@@ -237,6 +242,7 @@ def _eval_policy(
 
 
 def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -> np.ndarray:
+    """Compute greedy actions for a batch of logged contexts."""
     actions = np.zeros(contexts.shape[0], dtype=int)
     for i, base in enumerate(contexts):
         X = np.repeat(base[None, :], cfg.n_arms, axis=0)
@@ -246,6 +252,7 @@ def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -
 
 
 def _plot_curves(results: Dict[str, RunMetrics]) -> None:
+    """Plot cumulative averages for proxy, conversion, profit, and safety."""
     if plt is None:
         print("matplotlib not installed; skipping plots")
         return
@@ -294,6 +301,7 @@ def _plot_curves(results: Dict[str, RunMetrics]) -> None:
 
 
 def main() -> None:
+    """Parse args and run logging, training, OPE, and evaluation."""
     parser = argparse.ArgumentParser(description="Day 15 capstone runner")
     parser.add_argument("--rounds", type=int, default=5000)
     parser.add_argument("--log-rounds", type=int, default=1000)

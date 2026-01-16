@@ -10,6 +10,7 @@ except ImportError as exc:  # pragma: no cover
 
 
 def _one_hot(actions: np.ndarray, n_actions: int) -> np.ndarray:
+    """One-hot encode actions."""
     actions = np.asarray(actions, dtype=int).reshape(-1)
     out = np.zeros((actions.shape[0], n_actions), dtype=np.float64)
     out[np.arange(actions.shape[0]), actions] = 1.0
@@ -19,6 +20,7 @@ def _one_hot(actions: np.ndarray, n_actions: int) -> np.ndarray:
 def build_action_features(
     contexts: np.ndarray, actions: np.ndarray, n_actions: int
 ) -> np.ndarray:
+    """Concat context features with action one-hot encoding."""
     contexts = np.asarray(contexts, dtype=np.float64)
     return np.concatenate([contexts, _one_hot(actions, n_actions)], axis=1)
 
@@ -26,6 +28,7 @@ def build_action_features(
 def fit_reward_model(
     contexts: np.ndarray, actions: np.ndarray, rewards: np.ndarray, n_actions: int
 ) -> LogisticRegression:
+    """Fit a logistic reward model for DR OPE."""
     X = build_action_features(contexts, actions, n_actions)
     y = np.asarray(rewards, dtype=np.float64).reshape(-1)
     model = LogisticRegression(max_iter=1000)
@@ -36,6 +39,7 @@ def fit_reward_model(
 def predict_all_actions(
     model: LogisticRegression, contexts: np.ndarray, n_actions: int
 ) -> np.ndarray:
+    """Predict reward probabilities for every action in each context."""
     contexts = np.asarray(contexts, dtype=np.float64)
     preds = np.zeros((contexts.shape[0], n_actions), dtype=np.float64)
     for a in range(n_actions):
@@ -52,6 +56,7 @@ def dr_estimate(
     target_actions: np.ndarray,
     q_hat: np.ndarray,
 ) -> float:
+    """Compute a doubly-robust estimate for the target policy."""
     contexts = np.asarray(contexts, dtype=np.float64)
     actions = np.asarray(actions, dtype=int).reshape(-1)
     rewards = np.asarray(rewards, dtype=np.float64).reshape(-1)

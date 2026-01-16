@@ -8,6 +8,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class SimConfig:
+    """Simulation configuration constants."""
     n_arms: int = 3
     embed_dim: int = 8
     category_count: int = 4
@@ -26,12 +27,14 @@ MODEL_NAMES = ["A", "B", "C"]
 
 
 def one_hot(idx: int, size: int) -> np.ndarray:
+    """Return a one-hot vector of length size."""
     v = np.zeros(size, dtype=np.float64)
     v[int(idx)] = 1.0
     return v
 
 
 def sample_context(rng: np.random.Generator, cfg: SimConfig) -> Dict[str, np.ndarray | int]:
+    """Sample a user context with embedding, category, and persona."""
     embedding = rng.normal(size=cfg.embed_dim).astype(np.float64)
     category = int(rng.integers(0, cfg.category_count))
     persona = int(rng.integers(0, cfg.persona_count))
@@ -39,6 +42,7 @@ def sample_context(rng: np.random.Generator, cfg: SimConfig) -> Dict[str, np.nda
 
 
 def context_features(context: Dict[str, np.ndarray | int], cfg: SimConfig) -> np.ndarray:
+    """Build the base feature vector for a context."""
     embed = np.asarray(context["embedding"], dtype=np.float64)
     category = int(context["category"])
     persona = int(context["persona"])
@@ -52,17 +56,20 @@ def context_features(context: Dict[str, np.ndarray | int], cfg: SimConfig) -> np
 
 
 def make_context_matrix(context: Dict[str, np.ndarray | int], cfg: SimConfig) -> np.ndarray:
+    """Repeat the base features for each arm."""
     base = context_features(context, cfg)
     return np.repeat(base[None, :], cfg.n_arms, axis=0)
 
 
 def sample_delay(rng: np.random.Generator, cfg: SimConfig) -> int:
+    """Sample an integer delay for conversion feedback."""
     # Exponential delay to mimic long-tail feedback.
     delay = int(rng.exponential(cfg.delay_mean))
     return max(delay, 1)
 
 
 def model_cost(action: int, cfg: SimConfig) -> float:
+    """Return the cost for the chosen model."""
     return float(cfg.costs[int(action)])
 
 
@@ -71,6 +78,7 @@ def generate_description(
     action: int,
     unsafe_injected: bool,
 ) -> str:
+    """Create a synthetic product description string."""
     category = CATEGORY_NAMES[int(context["category"])]
     persona = PERSONA_NAMES[int(context["persona"])]
     model = MODEL_NAMES[int(action)]
@@ -94,6 +102,7 @@ def generate_description(
 
 
 def build_conversion_params(cfg: SimConfig, rng: np.random.Generator) -> Dict[str, np.ndarray]:
+    """Create hidden parameters for the conversion probability."""
     # Base weights for continuous embeddings per model.
     embed_w = rng.normal(scale=0.15, size=(cfg.n_arms, cfg.embed_dim)).astype(np.float64)
 
@@ -123,6 +132,7 @@ def build_conversion_params(cfg: SimConfig, rng: np.random.Generator) -> Dict[st
 
 
 def sigmoid(x: float) -> float:
+    """Sigmoid activation for probabilities."""
     return 1.0 / (1.0 + np.exp(-x))
 
 
@@ -131,6 +141,7 @@ def conversion_probability(
     action: int,
     params: Dict[str, np.ndarray],
 ) -> float:
+    """Compute conversion probability for a context/action pair."""
     embed = np.asarray(context["embedding"], dtype=np.float64)
     persona = int(context["persona"])
     category = int(context["category"])
@@ -146,10 +157,12 @@ def conversion_probability(
 
 
 def sample_conversion(rng: np.random.Generator, p: float) -> int:
+    """Sample a binary conversion with probability p."""
     return int(rng.random() < p)
 
 
 def proxy_with_noise(rng: np.random.Generator, proxy_score: float, cfg: SimConfig) -> float:
+    """Add noise to the proxy score and clip to [0, 1]."""
     noisy = float(proxy_score + rng.normal(0.0, cfg.proxy_noise_std))
     # Keep the proxy reward in [0, 1] after noise.
     return float(np.clip(noisy, 0.0, 1.0))

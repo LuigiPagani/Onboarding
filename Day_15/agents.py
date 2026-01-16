@@ -23,6 +23,7 @@ class EpsilonGreedyLinear:
     """Epsilon-greedy linear model using ridge regression updates."""
 
     def __init__(self, d: int, epsilon: float = 0.1, lam: float = 1.0):
+        """Initialize epsilon-greedy linear model."""
         self.d = int(d)
         self.epsilon = float(epsilon)
         self.lam = float(lam)
@@ -30,19 +31,23 @@ class EpsilonGreedyLinear:
         self.b = np.zeros(self.d, dtype=np.float64)
 
     def theta_hat(self) -> np.ndarray:
+        """Return current ridge-regression weights."""
         return self.A_inv @ self.b
 
     def greedy_arm(self, X: np.ndarray) -> int:
+        """Pick the best arm under the current linear model."""
         th = self.theta_hat()
         scores = X @ th
         return int(np.argmax(scores))
 
     def select_arm(self, X: np.ndarray, rng: np.random.Generator) -> int:
+        """Pick a random arm with epsilon, else greedy."""
         if rng.random() < self.epsilon:
             return int(rng.integers(0, X.shape[0]))
         return self.greedy_arm(X)
 
     def update(self, x: np.ndarray, r: float) -> None:
+        """Update the ridge-regression inverse with one sample."""
         x = np.asarray(x, dtype=np.float64).reshape(-1)
         # Sherman-Morrison update for the ridge-regression inverse.
         z = self.A_inv @ x
@@ -54,31 +59,39 @@ class LinUCBWrapper:
     """Wrap LinUCB to provide a consistent interface."""
 
     def __init__(self, d: int, alpha: float = 1.0, lam: float = 1.0):
+        """Initialize LinUCB with the shared interface."""
         self.agent = LinUCBAgent(d=d, alpha=alpha, lam=lam)
 
     def select_arm(self, X: np.ndarray) -> int:
+        """Pick an arm using UCB scores."""
         return self.agent.select_arm(X)
 
     def greedy_arm(self, X: np.ndarray) -> int:
+        """Reuse UCB selection as the greedy choice."""
         return self.agent.select_arm(X)
 
     def update(self, x: np.ndarray, r: float) -> None:
+        """Update LinUCB with an observed reward."""
         self.agent.update(x, r)
 
     @property
     def A_inv(self) -> np.ndarray:
+        """Expose the inverse covariance for diagnostics."""
         return self.agent.A_inv
 
     @property
     def b(self) -> np.ndarray:
+        """Expose the linear term for diagnostics."""
         return self.agent.b
 
     @property
     def d(self) -> int:
+        """Expose the feature dimension."""
         return self.agent.d
 
 
 def select_arm(agent, X: np.ndarray, rng: np.random.Generator) -> int:
+    """Dispatch select_arm for the agent type."""
     if isinstance(agent, LinearThompson):
         return agent.select_arm(X, rng)
     if isinstance(agent, EpsilonGreedyLinear):
@@ -87,6 +100,7 @@ def select_arm(agent, X: np.ndarray, rng: np.random.Generator) -> int:
 
 
 def greedy_arm(agent, X: np.ndarray) -> int:
+    """Dispatch greedy_arm for the agent type."""
     if isinstance(agent, LinearThompson):
         return agent.greedy_arm(X)
     if isinstance(agent, EpsilonGreedyLinear):

@@ -7,6 +7,7 @@ class LinearThompson:
     """Linear Thompson Sampling with Gaussian prior/posterior."""
 
     def __init__(self, d: int, lam: float = 1.0, sigma: float = 0.5):
+        """Initialize the Thompson Sampling posterior."""
         self.d = int(d)
         self.lam = float(lam)
         self.sigma = float(sigma)
@@ -15,16 +16,19 @@ class LinearThompson:
         self.b = np.zeros(self.d, dtype=np.float64)
 
     def sample_theta(self, rng: np.random.Generator) -> np.ndarray:
+        """Sample a parameter vector from the posterior."""
         mean = self.A_inv @ self.b
         cov = self.A_inv
         return rng.multivariate_normal(mean, cov)
 
     def select_arm(self, X: np.ndarray, rng: np.random.Generator) -> int:
+        """Select the arm that maximizes the sampled linear score."""
         theta = self.sample_theta(rng)
         scores = X @ theta
         return int(np.argmax(scores))
 
     def greedy_arm(self, X: np.ndarray) -> int:
+        """Select the arm that maximizes the posterior mean score."""
         mean = self.A_inv @ self.b
         scores = X @ mean
         return int(np.argmax(scores))
