@@ -120,9 +120,10 @@ def _train_agent(
     for t in range(rounds):
         # Apply delayed conversion + profit once the feedback arrives.
         for deliver_t, idx, conv, cost, features in [p for p in pending if p[0] <= t]:
+            profit_val = float(conv) * cfg.value_per_conversion - cost
             conversion[idx] = float(conv)
-            profit[idx] = float(conv) * cfg.value_per_conversion - cost
-            agent.update(features, float(conv))
+            profit[idx] = profit_val
+            agent.update(features, profit_val)
         pending = [p for p in pending if p[0] > t]
 
         context = sample_context(rng, cfg)
@@ -140,9 +141,10 @@ def _train_agent(
         cost = model_cost(action, cfg)
 
         if delay == 0:
+            profit_val = float(conv) * cfg.value_per_conversion - cost
             conversion[t] = float(conv)
-            profit[t] = float(conv) * cfg.value_per_conversion - cost
-            agent.update(Xb[action], float(conv))
+            profit[t] = profit_val
+            agent.update(Xb[action], profit_val)
         else:
             pending.append((t + delay, t, conv, cost, Xb[action].copy()))
 
