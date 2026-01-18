@@ -197,8 +197,9 @@ def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -
     return actions
 
 
-def _plot_curves(results: Dict[str, RunMetrics]) -> None:
+def _plot_curves(results: Dict[str, RunMetrics], title_prefix: str | None = None) -> None:
     """Plot cumulative averages for conversion, profit, and safety."""
+    prefix = f"{title_prefix} - " if title_prefix else ""
     if plt is None:
         print("matplotlib not installed; skipping plots")
         return
@@ -207,7 +208,7 @@ def _plot_curves(results: Dict[str, RunMetrics]) -> None:
     for name, metrics in results.items():
         avg = np.cumsum(metrics.conversion) / (np.arange(metrics.conversion.size) + 1)
         plt.plot(avg, label=name)
-    plt.title("Cumulative conversion rate")
+    plt.title(f"{prefix}Cumulative conversion rate")
     plt.xlabel("round")
     plt.ylabel("conversion rate")
     plt.legend()
@@ -217,7 +218,7 @@ def _plot_curves(results: Dict[str, RunMetrics]) -> None:
     for name, metrics in results.items():
         avg = np.cumsum(metrics.profit) / (np.arange(metrics.profit.size) + 1)
         plt.plot(avg, label=name)
-    plt.title("Cumulative avg profit")
+    plt.title(f"{prefix}Cumulative avg profit")
     plt.xlabel("round")
     plt.ylabel("profit")
     plt.legend()
@@ -227,7 +228,7 @@ def _plot_curves(results: Dict[str, RunMetrics]) -> None:
     for name, metrics in results.items():
         avg = np.cumsum(metrics.unsafe) / (np.arange(metrics.unsafe.size) + 1)
         plt.plot(avg, label=name)
-    plt.title("Cumulative unsafe rate")
+    plt.title(f"{prefix}Cumulative unsafe rate")
     plt.xlabel("round")
     plt.ylabel("unsafe rate")
     plt.legend()
@@ -281,6 +282,7 @@ def run_experiment(
     epsilon: float,
     delay_mean: float,
     plot: bool,
+    plot_title: str | None = None,
 ) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
     """Run a full experiment and return summaries plus eval curves."""
     cfg = SimConfig(delay_mean=delay_mean)
@@ -360,7 +362,7 @@ def run_experiment(
         )
 
     if plot:
-        _plot_curves(eval_results)
+        _plot_curves(eval_results, plot_title)
 
     return summaries, eval_results
 
