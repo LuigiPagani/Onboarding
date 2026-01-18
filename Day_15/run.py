@@ -265,9 +265,9 @@ def main() -> None:
         print(f"\n{name}:")
         print(f"  DR conversion estimate: {summary.dr_conversion:.4f}")
         print(f"  DR profit estimate:     {summary.dr_profit:.4f}")
-        print(f"  Actual conversion:      {summary.actual_conversion:.4f}")
-        print(f"  Actual profit:          {summary.actual_profit:.4f}")
-        print(f"  Actual unsafe rate:     {summary.actual_unsafe:.4f}")
+        print(f"  Eval conversion:        {summary.actual_conversion:.4f}")
+        print(f"  Eval profit:            {summary.actual_profit:.4f}")
+        print(f"  Eval unsafe rate:       {summary.actual_unsafe:.4f}")
 
     _plot_curves(eval_results)
 
