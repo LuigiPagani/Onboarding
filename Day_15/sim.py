@@ -14,9 +14,7 @@ class SimConfig:
     category_count: int = 4
     persona_count: int = 3
     delay_mean: float = 50.0
-    proxy_noise_std: float = 0.2
     unsafe_rate: float = 0.02
-    unsafe_threshold: float = 0.5
     value_per_conversion: float = 1.0
     costs: Tuple[float, float, float] = (0.01, 0.02, 0.10)
 
@@ -73,34 +71,6 @@ def sample_delay(rng: np.random.Generator, cfg: SimConfig) -> int:
 def model_cost(action: int, cfg: SimConfig) -> float:
     """Return the cost for the chosen model."""
     return float(cfg.costs[int(action)])
-
-
-def generate_description(
-    context: Dict[str, np.ndarray | int],
-    action: int,
-    unsafe_injected: bool,
-) -> str:
-    """Create a synthetic product description string."""
-    category = CATEGORY_NAMES[int(context["category"])]
-    persona = PERSONA_NAMES[int(context["persona"])]
-    model = MODEL_NAMES[int(action)]
-
-    if action == 0:
-        style = "short, budget-friendly, no-frills"
-    elif action == 1:
-        style = "balanced detail with clear benefits"
-    else:
-        style = "rich, premium, highly detailed"
-
-    desc = (
-        f"Model {model} description for {category}. "
-        f"Persona: {persona}. Style: {style}."
-    )
-
-    if unsafe_injected:
-        desc += " UNSAFE_TOKEN"
-
-    return desc
 
 
 def build_conversion_params(cfg: SimConfig, rng: np.random.Generator) -> Dict[str, np.ndarray]:
@@ -162,9 +132,3 @@ def sample_conversion(rng: np.random.Generator, p: float) -> int:
     """Sample a binary conversion with probability p."""
     return int(rng.random() < p)
 
-
-def proxy_with_noise(rng: np.random.Generator, proxy_score: float, cfg: SimConfig) -> float:
-    """Add noise to the proxy score and clip to [0, 1]."""
-    noisy = float(proxy_score + rng.normal(0.0, cfg.proxy_noise_std))
-    # Keep the proxy reward in [0, 1] after noise.
-    return float(np.clip(noisy, 0.0, 1.0))

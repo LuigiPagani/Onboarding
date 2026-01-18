@@ -14,20 +14,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from Day_15 import agents
-from Day_15.judge import JudgeConfig, get_client, judge_description
 from Day_15.ope import dr_estimate, fit_reward_model, predict_all_actions
 from Day_15.sim import (
-    CATEGORY_NAMES,
-    MODEL_NAMES,
-    PERSONA_NAMES,
     SimConfig,
     build_conversion_params,
     conversion_probability,
     context_features,
-    generate_description,
     make_context_matrix,
     model_cost,
-    proxy_with_noise,
     sample_context,
     sample_conversion,
     sample_delay,
@@ -42,7 +36,6 @@ except ImportError:  # pragma: no cover
 @dataclass
 class RunMetrics:
     """Per-round metrics collected from a run."""
-    proxy: np.ndarray
     conversion: np.ndarray
     profit: np.ndarray
     unsafe: np.ndarray
@@ -56,28 +49,6 @@ class SummaryMetrics:
     actual_conversion: float
     actual_profit: float
     actual_unsafe: float
-
-
-def _score_description(
-    client,
-    judge_cfg: JudgeConfig,
-    description: str,
-    persona: str,
-    category: str,
-    unsafe_injected: bool,
-    model_name: str,
-) -> Tuple[float, float]:
-    """Score a description with the LLM judge and safety override."""
-    proxy_score, unsafe_score, _ = judge_description(
-        client=client,
-        cfg=judge_cfg,
-        description=description,
-        persona=persona,
-        category=category,
-    )
-    if unsafe_injected:
-        unsafe_score = max(unsafe_score, 0.9)
-    return proxy_score, unsafe_score
 
 
 def _run_logging_phase(
@@ -132,29 +103,26 @@ def _run_logging_phase(
 
 
 def _train_agent(
-    name: str,
     agent,
     cfg: SimConfig,
     params: Dict[str, np.ndarray],
-    judge_cfg: JudgeConfig,
-    client,
     rng: np.random.Generator,
     rounds: int,
 ) -> RunMetrics:
-    """Train one agent with proxy rewards and delayed conversion feedback."""
-    proxy = np.zeros(rounds, dtype=np.float64)
+    """Train one agent with delayed conversion feedback."""
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
     unsafe = np.zeros(rounds, dtype=np.float64)
 
-    # Pending conversions with costs: (deliver_at, idx, conv, cost).
-    pending: List[Tuple[int, int, int, float]] = []
+    # Pending conversions with costs: (deliver_at, idx, conv, cost, features).
+    pending: List[Tuple[int, int, int, float, np.ndarray]] = []
 
     for t in range(rounds):
         # Apply delayed conversion + profit once the feedback arrives.
-        for deliver_t, idx, conv, cost in [p for p in pending if p[0] <= t]:
+        for deliver_t, idx, conv, cost, features in [p for p in pending if p[0] <= t]:
             conversion[idx] = float(conv)
             profit[idx] = float(conv) * cfg.value_per_conversion - cost
+            agent.update(features, float(conv))
         pending = [p for p in pending if p[0] > t]
 
         context = sample_context(rng, cfg)
@@ -163,61 +131,36 @@ def _train_agent(
 
         action = agents.select_arm(agent, Xb, rng)
         unsafe_injected = action == 2 and rng.random() < cfg.unsafe_rate
-
-        description = generate_description(context, action, unsafe_injected)
-        persona = PERSONA_NAMES[int(context["persona"])]
-        category = CATEGORY_NAMES[int(context["category"])]
-
-        proxy_score, unsafe_score = _score_description(
-            client,
-            judge_cfg,
-            description,
-            persona,
-            category,
-            unsafe_injected,
-            MODEL_NAMES[int(action)],
-        )
-        is_unsafe = unsafe_score >= cfg.unsafe_threshold
+        is_unsafe = unsafe_injected
         unsafe[t] = 1.0 if is_unsafe else 0.0
-
-        proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
-        if is_unsafe:
-            proxy_reward = 0.0
 
         p_conv = conversion_probability(context, action, params)
         conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
         delay = sample_delay(rng, cfg)
         cost = model_cost(action, cfg)
 
-        # If there's no delay, train on real conversion; otherwise train on proxy.
-        train_reward = float(conv) if delay == 0 else proxy_reward
-        agent.update(Xb[action], train_reward)
-        proxy[t] = proxy_reward
-
         if delay == 0:
             conversion[t] = float(conv)
             profit[t] = float(conv) * cfg.value_per_conversion - cost
+            agent.update(Xb[action], float(conv))
         else:
-            pending.append((t + delay, t, conv, cost))
+            pending.append((t + delay, t, conv, cost, Xb[action].copy()))
 
-    for _, idx, conv, cost in pending:
+    for _, idx, conv, cost, _ in pending:
         conversion[idx] = float(conv)
         profit[idx] = float(conv) * cfg.value_per_conversion - cost
 
-    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit, unsafe=unsafe)
+    return RunMetrics(conversion=conversion, profit=profit, unsafe=unsafe)
 
 
 def _eval_policy(
     agent,
     cfg: SimConfig,
     params: Dict[str, np.ndarray],
-    judge_cfg: JudgeConfig,
-    client,
     rng: np.random.Generator,
     rounds: int,
 ) -> RunMetrics:
     """Evaluate a learned policy without updating it."""
-    proxy = np.zeros(rounds, dtype=np.float64)
     conversion = np.zeros(rounds, dtype=np.float64)
     profit = np.zeros(rounds, dtype=np.float64)
     unsafe = np.zeros(rounds, dtype=np.float64)
@@ -229,36 +172,17 @@ def _eval_policy(
 
         action = agents.greedy_arm(agent, Xb)
         unsafe_injected = action == 2 and rng.random() < cfg.unsafe_rate
-
-        description = generate_description(context, action, unsafe_injected)
-        persona = PERSONA_NAMES[int(context["persona"])]
-        category = CATEGORY_NAMES[int(context["category"])]
-
-        proxy_score, unsafe_score = _score_description(
-            client,
-            judge_cfg,
-            description,
-            persona,
-            category,
-            unsafe_injected,
-            MODEL_NAMES[int(action)],
-        )
-        is_unsafe = unsafe_score >= cfg.unsafe_threshold
+        is_unsafe = unsafe_injected
         unsafe[t] = 1.0 if is_unsafe else 0.0
-
-        proxy_reward = proxy_with_noise(rng, proxy_score, cfg)
-        if is_unsafe:
-            proxy_reward = 0.0
 
         p_conv = conversion_probability(context, action, params)
         conv = 0 if is_unsafe else sample_conversion(rng, p_conv)
         cost = model_cost(action, cfg)
 
-        proxy[t] = proxy_reward
         conversion[t] = float(conv)
         profit[t] = float(conv) * cfg.value_per_conversion - cost
 
-    return RunMetrics(proxy=proxy, conversion=conversion, profit=profit, unsafe=unsafe)
+    return RunMetrics(conversion=conversion, profit=profit, unsafe=unsafe)
 
 
 def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -> np.ndarray:
@@ -272,20 +196,10 @@ def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -
 
 
 def _plot_curves(results: Dict[str, RunMetrics]) -> None:
-    """Plot cumulative averages for proxy, conversion, profit, and safety."""
+    """Plot cumulative averages for conversion, profit, and safety."""
     if plt is None:
         print("matplotlib not installed; skipping plots")
         return
-
-    plt.figure(figsize=(8, 4))
-    for name, metrics in results.items():
-        avg = np.cumsum(metrics.proxy) / (np.arange(metrics.proxy.size) + 1)
-        plt.plot(avg, label=name)
-    plt.title("Cumulative avg proxy reward")
-    plt.xlabel("round")
-    plt.ylabel("proxy")
-    plt.legend()
-    plt.tight_layout()
 
     plt.figure(figsize=(8, 4))
     for name, metrics in results.items():
@@ -328,8 +242,6 @@ def main() -> None:
     parser.add_argument("--eval-rounds", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--judge-model", type=str, default="gpt-4.1-nano")
-    parser.add_argument("--judge-temp", type=float, default=0.1)
     parser.add_argument("--delay-mean", type=float, default=50.0)
 
     args = parser.parse_args()
@@ -343,8 +255,6 @@ def main() -> None:
         eval_rounds=args.eval_rounds,
         seed=args.seed,
         epsilon=args.epsilon,
-        judge_model=args.judge_model,
-        judge_temp=args.judge_temp,
         delay_mean=args.delay_mean,
         plot=False,
     )
@@ -367,8 +277,6 @@ def run_experiment(
     eval_rounds: int,
     seed: int,
     epsilon: float,
-    judge_model: str,
-    judge_temp: float,
     delay_mean: float,
     plot: bool,
 ) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
@@ -383,9 +291,6 @@ def run_experiment(
         rng=np.random.default_rng(seed + 1),
         rounds=log_rounds,
     )
-
-    client = get_client()
-    judge_cfg = JudgeConfig(model=judge_model, temperature=judge_temp)
 
     d_base = cfg.embed_dim + cfg.category_count + cfg.persona_count + 1
     d_block = d_base * cfg.n_arms
@@ -403,12 +308,9 @@ def run_experiment(
     for idx, (name, agent) in enumerate(agents_map.items()):
         rng_train = np.random.default_rng(seed + 10 + idx)
         train_results[name] = _train_agent(
-            name=name,
             agent=agent,
             cfg=cfg,
             params=params,
-            judge_cfg=judge_cfg,
-            client=client,
             rng=rng_train,
             rounds=rounds - log_rounds,
         )
@@ -418,8 +320,6 @@ def run_experiment(
             agent=agent,
             cfg=cfg,
             params=params,
-            judge_cfg=judge_cfg,
-            client=client,
             rng=rng_eval,
             rounds=eval_rounds,
         )
