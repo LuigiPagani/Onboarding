@@ -79,8 +79,15 @@ class LinUCBWrapper:
         return self.agent.select_arm(X)
 
     def greedy_arm(self, X: np.ndarray) -> int:
-        """Reuse UCB selection as the greedy choice."""
-        return self.agent.select_arm(X)
+        """Pick the best arm by mean reward (no UCB bonus)."""
+        X = np.asarray(X, dtype=np.float64)
+        if X.ndim != 2:
+            raise ValueError(f"X must be 2D, got {X.ndim}D")
+        if X.shape[1] != self.agent.d:
+            raise ValueError(f"X.shape[1]={X.shape[1]} must equal d={self.agent.d}")
+        th = self.agent.theta_hat()
+        scores = X @ th
+        return int(np.argmax(scores))
 
     def update(self, x: np.ndarray, r: float) -> None:
         """Update LinUCB with an observed reward."""
