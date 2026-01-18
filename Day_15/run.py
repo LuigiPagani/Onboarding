@@ -197,18 +197,38 @@ def _policy_actions_from_contexts(agent, contexts: np.ndarray, cfg: SimConfig) -
     return actions
 
 
-def _plot_curves(results: Dict[str, RunMetrics], title_prefix: str | None = None) -> None:
-    """Plot cumulative averages for conversion, profit, and safety."""
+def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
+    """Return a simple moving average over the given window."""
+    window = max(1, int(window))
+    if values.size == 0:
+        return values
+    if window > values.size:
+        window = values.size
+    kernel = np.ones(window, dtype=np.float64) / float(window)
+    return np.convolve(values, kernel, mode="valid")
+
+
+def _plot_curves(
+    results: Dict[str, RunMetrics],
+    title_prefix: str | None = None,
+    moving_avg_window: int | None = None,
+) -> None:
+    """Plot cumulative averages or moving averages for conversion, profit, and safety."""
     prefix = f"{title_prefix} - " if title_prefix else ""
+    use_moving_avg = moving_avg_window is not None and moving_avg_window > 1
     if plt is None:
         print("matplotlib not installed; skipping plots")
         return
 
     plt.figure(figsize=(8, 4))
     for name, metrics in results.items():
-        avg = np.cumsum(metrics.conversion) / (np.arange(metrics.conversion.size) + 1)
-        plt.plot(avg, label=name)
-    plt.title(f"{prefix}Cumulative conversion rate")
+        if use_moving_avg:
+            series = _moving_average(metrics.conversion, moving_avg_window)
+        else:
+            series = np.cumsum(metrics.conversion) / (np.arange(metrics.conversion.size) + 1)
+        plt.plot(series, label=name)
+    title = "Moving avg conversion rate" if use_moving_avg else "Cumulative conversion rate"
+    plt.title(f"{prefix}{title}")
     plt.xlabel("round")
     plt.ylabel("conversion rate")
     plt.legend()
@@ -216,9 +236,13 @@ def _plot_curves(results: Dict[str, RunMetrics], title_prefix: str | None = None
 
     plt.figure(figsize=(8, 4))
     for name, metrics in results.items():
-        avg = np.cumsum(metrics.profit) / (np.arange(metrics.profit.size) + 1)
-        plt.plot(avg, label=name)
-    plt.title(f"{prefix}Cumulative avg profit")
+        if use_moving_avg:
+            series = _moving_average(metrics.profit, moving_avg_window)
+        else:
+            series = np.cumsum(metrics.profit) / (np.arange(metrics.profit.size) + 1)
+        plt.plot(series, label=name)
+    title = "Moving avg profit" if use_moving_avg else "Cumulative avg profit"
+    plt.title(f"{prefix}{title}")
     plt.xlabel("round")
     plt.ylabel("profit")
     plt.legend()
@@ -226,9 +250,13 @@ def _plot_curves(results: Dict[str, RunMetrics], title_prefix: str | None = None
 
     plt.figure(figsize=(8, 4))
     for name, metrics in results.items():
-        avg = np.cumsum(metrics.unsafe) / (np.arange(metrics.unsafe.size) + 1)
-        plt.plot(avg, label=name)
-    plt.title(f"{prefix}Cumulative unsafe rate")
+        if use_moving_avg:
+            series = _moving_average(metrics.unsafe, moving_avg_window)
+        else:
+            series = np.cumsum(metrics.unsafe) / (np.arange(metrics.unsafe.size) + 1)
+        plt.plot(series, label=name)
+    title = "Moving avg unsafe rate" if use_moving_avg else "Cumulative unsafe rate"
+    plt.title(f"{prefix}{title}")
     plt.xlabel("round")
     plt.ylabel("unsafe rate")
     plt.legend()
@@ -246,6 +274,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--delay-mean", type=float, default=50.0)
+    parser.add_argument("--plot-train", action="store_true")
+    parser.add_argument("--train-window", type=int, default=200)
 
     args = parser.parse_args()
 
@@ -260,6 +290,8 @@ def main() -> None:
         epsilon=args.epsilon,
         delay_mean=args.delay_mean,
         plot=False,
+        plot_train=args.plot_train,
+        train_window=args.train_window,
     )
 
     for name, summary in summaries.items():
@@ -283,6 +315,8 @@ def run_experiment(
     delay_mean: float,
     plot: bool,
     plot_title: str | None = None,
+    plot_train: bool = False,
+    train_window: int = 200,
 ) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
     """Run a full experiment and return summaries plus eval curves."""
     cfg = SimConfig(delay_mean=delay_mean)
@@ -362,7 +396,13 @@ def run_experiment(
         )
 
     if plot:
-        _plot_curves(eval_results, plot_title)
+        eval_prefix = f"{plot_title} Eval" if plot_title else "Eval"
+        _plot_curves(eval_results, eval_prefix)
+    if plot_train:
+        train_prefix = f"{plot_title} Train (MA window={train_window})" if plot_title else (
+            f"Train (MA window={train_window})"
+        )
+        _plot_curves(train_results, train_prefix, moving_avg_window=train_window)
 
     return summaries, eval_results
 
