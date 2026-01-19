@@ -274,8 +274,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--delay-mean", type=float, default=50.0)
+    parser.add_argument("--no-ope-interactions", action="store_false", dest="ope_interactions")
     parser.add_argument("--plot-train", action="store_true")
     parser.add_argument("--train-window", type=int, default=200)
+    parser.set_defaults(ope_interactions=True)
 
     args = parser.parse_args()
 
@@ -292,6 +294,7 @@ def main() -> None:
         plot=False,
         plot_train=args.plot_train,
         train_window=args.train_window,
+        ope_interactions=args.ope_interactions,
     )
 
     for name, summary in summaries.items():
@@ -317,6 +320,7 @@ def run_experiment(
     plot_title: str | None = None,
     plot_train: bool = False,
     train_window: int = 200,
+    ope_interactions: bool = True,
 ) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
     """Run a full experiment and return summaries plus eval curves."""
     cfg = SimConfig(delay_mean=delay_mean)
@@ -369,8 +373,14 @@ def run_experiment(
             log_data["actions"],
             log_data["rewards"],
             cfg.n_arms,
+            use_interactions=ope_interactions,
         )
-        q_hat = predict_all_actions(model, log_data["contexts"], cfg.n_arms)
+        q_hat = predict_all_actions(
+            model,
+            log_data["contexts"],
+            cfg.n_arms,
+            use_interactions=ope_interactions,
+        )
         dr_conv = dr_estimate(
             log_data["contexts"],
             log_data["actions"],
