@@ -274,10 +274,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--delay-mean", type=float, default=50.0)
-    parser.add_argument("--no-ope-interactions", action="store_false", dest="ope_interactions")
+    parser.add_argument("--ope-interactions", action="store_true")
     parser.add_argument("--plot-train", action="store_true")
     parser.add_argument("--train-window", type=int, default=200)
-    parser.set_defaults(ope_interactions=True)
+    parser.set_defaults(ope_interactions=False)
 
     args = parser.parse_args()
 
@@ -320,7 +320,7 @@ def run_experiment(
     plot_title: str | None = None,
     plot_train: bool = False,
     train_window: int = 200,
-    ope_interactions: bool = True,
+    ope_interactions: bool = False,
 ) -> tuple[Dict[str, SummaryMetrics], Dict[str, RunMetrics]]:
     """Run a full experiment and return summaries plus eval curves."""
     cfg = SimConfig(delay_mean=delay_mean)
